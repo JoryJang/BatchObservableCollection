@@ -1,0 +1,114 @@
+<Window x:Class="WpfBatchDemo.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BatchObservableCollection 批量操作演示"
+        Height="800" Width="950"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel>
+        <!-- 底部：统计栏 + 最近操作描述 -->
+        <Border DockPanel.Dock="Bottom" Background="#F0F0F0" Padding="12,8" BorderBrush="#DDDDDD" BorderThickness="0,1,0,0">
+            <StackPanel>
+                <TextBlock Text="{Binding StatsText}" FontFamily="Consolas" FontSize="13" Foreground="#333333"/>
+                <TextBlock Text="{Binding LastOperation}" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="#0066AA"/>
+            </StackPanel>
+        </Border>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="390"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左侧：操作面板 -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="10">
+
+                    <GroupBox Header="① AddRange —— 阈值决定通知策略">
+                        <StackPanel>
+                            <Button Content="小批量添加 ×10（逐项 Add）"
+                                    Command="{Binding AddSmallCommand}"
+                                    ToolTip="项数 ≤ 阈值：每项触发一次 Add 通知，ListBox 保留增量插入动画与滚动位置"/>
+                            <Button Content="大批量添加 ×5000（单次 Reset）"
+                                    Command="{Binding AddLargeCommand}"
+                                    ToolTip="项数 &gt; 阈值：静默写入后只触发一次 Reset，避免 5000 次逐项通知造成 UI 卡顿"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="② AddRangeThreshold —— 阈值实时调节">
+                        <StackPanel>
+                            <Slider Minimum="1" Maximum="6000"
+                                    Value="{Binding Threshold, Mode=TwoWay}"
+                                    IsSnapToTickEnabled="True" TickFrequency="5"
+                                    Margin="0,4,0,4"/>
+                            <TextBlock Text="{Binding ThresholdText}" FontSize="12" Foreground="#555555" TextWrapping="Wrap"/>
+                            <TextBlock Text="提示：把阈值调到 5000 以上再点“大批量添加”，观察 Add 计数暴涨、UI 变卡 —— 这就是逐项通知的代价。"
+                                       FontSize="12" Foreground="#B0641E" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="③ 批量移除 / 整体替换">
+                        <StackPanel>
+                            <Button Content="RemoveRange —— 随机移除一批（单次 Reset）"
+                                    Command="{Binding RemoveBatchCommand}"
+                                    ToolTip="内部 O(n+m) 倒序定位移除，仅触发一次 Reset"/>
+                            <Button Content="ReplaceAll —— 整体替换 ×800（单次 Reset）"
+                                    Command="{Binding ReplaceAllCommand}"
+                                    ToolTip="清空 + 重填，等价于 ClearAndAdd，但只刷新一次"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="④ Suspend / Resume —— 通知挂起">
+                        <StackPanel>
+                            <Button Content="挂起 → 3×AddRange(50) + 移除 → 恢复"
+                                    Command="{Binding SuspendDemoCommand}"
+                                    ToolTip="挂起期间所有变更静默；ResumeNotifications 计数归零时统一触发一次 Reset"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="⑤ 后台线程加载（线程封送）">
+                        <StackPanel>
+                            <Button Content="后台 Task.Run 生产 3000 条 → 封送回 UI 线程"
+                                    Command="{Binding BackgroundLoadCommand}"
+                                    ToolTip="后台线程只生产数据；所有集合修改经 Dispatcher 封送回 UI 线程执行"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="⑥ 其它">
+                        <StackPanel>
+                            <Button Content="清空集合（单次 Reset）" Command="{Binding ClearCommand}"/>
+                            <Button Content="重置通知统计" Command="{Binding ResetStatsCommand}"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 右侧：数据列表 -->
+            <DockPanel Grid.Column="1" Margin="10">
+                <Border DockPanel.Dock="Top" Background="#FFF7E6" Padding="8,4" CornerRadius="3" Margin="0,0,0,6">
+                    <TextBlock FontSize="12" Foreground="#8A6D3B" TextWrapping="Wrap"
+                               Text="所有按钮最终都只调 AddRange / RemoveRange / ReplaceAll / ClearAndAdd 这几个批量 API —— 观察底部计数器如何响应不同的通知策略。"/>
+                </Border>
+                <ListBox ItemsSource="{Binding Logs}"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         FontFamily="Consolas" FontSize="13">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="80"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="110"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Id, StringFormat=#{0}}" Foreground="#0066AA"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Grid.Column="2" Text="{Binding CreatedAt, StringFormat=HH:mm:ss.fff}"
+                                           Foreground="#888888" HorizontalAlignment="Right"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>
