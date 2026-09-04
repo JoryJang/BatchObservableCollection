@@ -13,7 +13,8 @@
 | `AddRange(items)` | 批量追加。项数 **> 阈值**（默认 50）→ 静默写入 + **单次 `Reset`** 通知；项数 **≤ 阈值** → 逐项 `Add` 通知，保留增量动画与滚动位置 |
 | `RemoveRange(items)` | 批量移除。O(n+m) 倒序定位（对比逐项 `Remove` 的 O(n×m)），无论移除多少项只触发**一次 `Reset`** |
 | `ReplaceAll(items)` / `ClearAndAdd(items)` | 清空 + 重填，仅触发**一次 `Reset`** |
-| `SuspendNotifications()` / `ResumeNotifications()` | 通知挂起（支持嵌套计数）：复杂批量操作期间全部静默，恢复时统一补发一次 `Reset` |
+| `SuspendNotifications()` / `ResumeNotifications()` | 通知挂起（支持嵌套计数）：复杂批量操作期间全部静默，恢复时统一补发一次 `Reset`；挂起期间无任何修改则恢复时不通知 |
+| `BeginUpdate()` | `IDisposable` 作用域版挂起：`using` 语句自动配对 Suspend / Resume，支持嵌套，防重复 `Dispose` |
 | `AddRangeThreshold` | "大批量"阈值，可运行时调节（赋值 < 1 抛异常） |
 | 重入保护 | 所有变更方法均经 `CheckReentrancy()`，事件处理期间禁止重入修改 |
 
@@ -24,6 +25,7 @@
 - **`Reset` 前先发 `Count` / `Item[]` 属性变更**：与基类通知顺序一致，绑定引擎先读到新的 `Count` 再处理 `Reset`。
 - **抑制标志用 `try/finally` 复位**：即使元素回调（`GetHashCode` / `Equals` 等）抛异常，集合也不会永久"失聪"。
 - **`RemoveRange` 保持多重集语义**：`items` 中某元素出现 k 次，恰好移除集合中前 k 个匹配项，与逐个调用 `Remove` 的结果完全一致；无任何匹配时保持静默，不做无意义的整表刷新。
+- **挂起恢复带脏标记**：挂起期间没有任何修改时，`ResumeNotifications()` 不会补发多余的 `Reset`（避免一次无意义的整表刷新）。
 
 ### 线程模型（重要）
 
@@ -63,6 +65,13 @@ try
 finally
 {
     logs.ResumeNotifications(); // 统一触发一次 Reset
+}
+
+// 更省心的写法：using 作用域自动配对（Dispose 时统一补发一次 Reset）
+using (logs.BeginUpdate())
+{
+    logs.ClearAndAdd(newData);
+    logs.AddRange(moreData);
 }
 ```
 

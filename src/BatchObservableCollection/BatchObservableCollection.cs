@@ -13,7 +13,7 @@ namespace WpfApps.Infrastructure.Collections
     /// <list type="bullet">
     /// <item><description>大批量添加 / 移除 / 替换时的单次 <see cref="NotifyCollectionChangedAction.Reset"/> 通知，避免海量逐项通知造成 UI 卡顿；</description></item>
     /// <item><description>小批量添加仍逐项触发 Add 通知，以保留 ListView / DataGrid 的增量动画与滚动位置；</description></item>
-    /// <item><description><see cref="SuspendNotifications"/> / <see cref="ResumeNotifications"/> 通知挂起机制，用于复杂批量操作仅触发一次 Reset；</description></item>
+    /// <item><description><see cref="SuspendNotifications"/> / <see cref="ResumeNotifications"/> 通知挂起机制，用于复杂批量操作仅触发一次 Reset；亦可通过 <see cref="BeginUpdate"/> 以 using 语句自动配对；</description></item>
     /// <item><description>所有变更均经 <see cref="ObservableCollection{T}.CheckReentrancy"/> 保护，防止集合在事件处理期间被重入修改。</description></item>
     /// </list>
     /// </summary>
@@ -53,6 +53,14 @@ namespace WpfApps.Infrastructure.Collections
         /// 而 <see cref="_suspensionCount"/> 表达“调用方主动挂起了通知”，是跨方法调用的外部状态。
         /// </summary>
         private bool _batchSuppress;
+
+        /// <summary>
+        /// 挂起期间发生过变更的脏标记：仅当 <see cref="_suspensionCount"/> 从 1 归 0 且此标记为
+        /// <see langword="true"/> 时，<see cref="ResumeNotifications"/> 才补发 Reset，
+        /// 避免挂起期间“无任何修改”时恢复通知引发一次多余的整表刷新。
+        /// 仅在通知被挂起（<see cref="_suspensionCount"/> &gt; 0）时置位。
+        /// </summary>
+        private bool _resetPending;
 
         /// <summary>
         /// <see cref="AddRangeThreshold"/> 属性的后备存储。默认取 <see cref="DefaultAddRangeThreshold"/>。
@@ -127,6 +135,11 @@ namespace WpfApps.Infrastructure.Collections
         {
             if (_suspensionCount > 0 || _batchSuppress)
             {
+                // 仅在“调用方主动挂起”期间记录脏标记；内部批量写入的 Reset 由批量方法自身负责补发。
+                if (_suspensionCount > 0)
+                {
+                    _resetPending = true;
+                }
                 return;
             }
 
@@ -142,6 +155,10 @@ namespace WpfApps.Infrastructure.Collections
         {
             if (_suspensionCount > 0 || _batchSuppress)
             {
+                if (_suspensionCount > 0)
+                {
+                    _resetPending = true;
+                }
                 return;
             }
 
@@ -358,8 +375,8 @@ namespace WpfApps.Infrastructure.Collections
         /// <remarks>
         /// <para>支持<b>嵌套</b>：内部以计数器维护，只有当 <see cref="ResumeNotifications"/> 的调用次数
         /// 与 <see cref="SuspendNotifications"/> 相等时，才真正恢复通知并触发 Reset。</para>
-        /// <para>挂起期间对集合的修改不会对外通知；即便集合内容未发生改变，恢复时仍会触发一次 Reset
-        /// （语义简单、行为可预测，调用方不应依赖“无变更则不通知”）。</para>
+        /// <para>挂起期间对集合的修改不会对外通知；若挂起期间发生过修改，
+        /// 恢复时（计数归零）会触发一次 Reset；若挂起期间无任何修改，恢复时不会触发通知。</para>
         /// <para>本方法内部调用 <see cref="ObservableCollection{T}.CheckReentrancy"/>。</para>
         /// </remarks>
         public void SuspendNotifications()
@@ -370,7 +387,9 @@ namespace WpfApps.Infrastructure.Collections
 
         /// <summary>
         /// 恢复集合的变更通知。若此前存在与之配对的 <see cref="SuspendNotifications"/> 嵌套调用，
-        /// 仅当嵌套计数归零时才真正恢复，并统一触发一次 <see cref="NotifyCollectionChangedAction.Reset"/>。
+        /// 仅当嵌套计数归零时才真正恢复；此时若挂起期间<b>发生过实际变更</b>（脏标记置位），
+        /// 则统一触发一次 <see cref="NotifyCollectionChangedAction.Reset"/>；
+        /// 若挂起期间没有任何修改，则不补发 Reset，避免无意义的整表刷新。
         /// </summary>
         /// <exception cref="InvalidOperationException">在未处于挂起状态（Resume 调用次数多于 Suspend）时调用将抛出。</exception>
         /// <remarks>本方法内部调用 <see cref="ObservableCollection{T}.CheckReentrancy"/>。</remarks>
@@ -385,10 +404,30 @@ namespace WpfApps.Infrastructure.Collections
             }
 
             _suspensionCount--;
-            if (_suspensionCount == 0)
+            if (_suspensionCount == 0 && _resetPending)
             {
+                _resetPending = false;
                 RaiseReset();
             }
+        }
+
+        /// <summary>
+        /// 以 <see cref="IDisposable"/> 方式挂起通知，配合 <c>using</c> 语句自动恢复，无需手动配对：
+        /// <code>
+        /// using (collection.BeginUpdate())
+        /// {
+        ///     collection.Add(item1);
+        ///     collection.RemoveAt(0);
+        /// } // 此处统一补发一次 Reset（若期间发生过修改）
+        /// </code>
+        /// 内部即调用 <see cref="SuspendNotifications"/> / <see cref="ResumeNotifications"/>，
+        /// 支持嵌套（与手动挂起共用同一计数器），同样受重入保护约束。
+        /// </summary>
+        /// <returns>Dispose 时调用 <see cref="ResumeNotifications"/> 的作用域对象。</returns>
+        public IDisposable BeginUpdate()
+        {
+            SuspendNotifications();
+            return new UpdateScope(this);
         }
 
         // ---- 内部辅助 ----
@@ -405,6 +444,30 @@ namespace WpfApps.Infrastructure.Collections
             OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
             OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
             OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        }
+
+        /// <summary>
+        /// <see cref="BeginUpdate"/> 返回的通知挂起作用域对象。
+        /// Dispose 时通知所属集合恢复通知；内部置空引用以防止 Dispose 被调用两次导致挂起计数失衡。
+        /// </summary>
+        private sealed class UpdateScope : IDisposable
+        {
+            private BatchObservableCollection<T> _owner;
+
+            public UpdateScope(BatchObservableCollection<T> owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null; // 防止 Dispose 被调用两次导致计数失衡
+                if (owner != null)
+                {
+                    owner.ResumeNotifications();
+                }
+            }
         }
     }
 }
